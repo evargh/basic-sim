@@ -208,6 +208,18 @@ void TcpFlowSendApplication::SendData(void) {
         // m_sendSize is uint32_t.
         uint64_t toSend = m_sendSize;
         // Make sure we don't send too many
+	//
+	// In order to send packets as a Poisson, we need to create an exponential random variable, bound it to the amount of remaining time in the horizon
+	// and run it from there 
+	// Or there can be a computation where the packet is pre-split into MTU-sized chunks and a remainder, and each of those are scheduled along the time horizon to be sent
+	//
+	// m_maxBytes % MTU == 0, then no extra packet
+	// otherwise, integer division determines number of full-size packets
+	//
+	// then, based on GSL incoming traffic rate, we can convert that to MTU-packets per second, and then use that as an average rate
+	// Then we iteratively generate an exponential random variable distribution, based on the amount of time left after the last scheduling
+	// bound in exp_x(lambda, bound) = realization of exp_{x-1}(lambda, bound)
+	// then the packet is scheduled for the realization of exp_x + the realization of exp_{x-1}
         if (m_maxBytes > 0) {
             toSend = std::min(toSend, m_maxBytes - m_totBytes);
         }
