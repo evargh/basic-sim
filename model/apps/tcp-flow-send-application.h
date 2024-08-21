@@ -80,6 +80,7 @@ private:
   std::string     m_additionalParameters; //!< Not used in this version of the application
   uint32_t        m_current_cwnd_byte;     //!< Current congestion window (detailed logging)
   int64_t         m_current_rtt_ns;        //!< Current last RTT sample (detailed logging)
+  bool		  m_dropLoop;
 
   // TCP flow logging
   bool m_enableDetailedLogging;            //!< True iff you want to write detailed logs
@@ -98,7 +99,7 @@ private:
   void InsertCwndLog(int64_t timestamp, uint32_t cwnd_byte);
   void InsertRttLog (int64_t timestamp, int64_t rtt_ns);
   void InsertProgressLog (int64_t timestamp, int64_t progress_byte);
-
+  void SendWrapper(Ptr<Packet> p, uint64_t toSend);
 };
 
 } // namespace ns3

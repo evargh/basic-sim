@@ -35,6 +35,9 @@
 #include "ns3/tcp-socket-base.h"
 #include "ns3/tcp-tx-buffer.h"
 #include "ns3/exp-util.h"
+#include "ns3/queue.h"
+#include "ns3/timer.h"
+#include "ns3/random-variable-stream.h"
 #include "tcp-flow-send-application.h"
 #include <fstream>
 
@@ -126,7 +129,7 @@ TcpFlowSendApplication::DoDispose(void) {
 
 void TcpFlowSendApplication::StartApplication(void) { // Called at time specified by Start
     NS_LOG_FUNCTION(this);
-
+	m_dropLoop = false;
     // Create the socket if not already
     if (!m_socket) {
         m_socket = Socket::CreateSocket(GetNode(), m_tid);
@@ -199,8 +202,37 @@ void TcpFlowSendApplication::StopApplication(void) { // Called at time specified
     }
 }
 
+// EVAN: Since Socket::Send is virtual, we need a wrapper
+void TcpFlowSendApplication::SendWrapper(Ptr<Packet> p, uint64_t toSend) {
+	int actual = m_socket->Send(p);
+	if (actual > 0) {
+		m_totBytes += actual;
+		m_txTrace(p);
+	}
+	// here, set a boolean flag to signal that the loop should be broken
+        if ((unsigned) actual != toSend) {
+        	m_dropLoop = true;    
+        }
+	// then this directly calls SendData
+}
+
+// with a mutex, I would need to delay for both a certain amount of simulated time as well as wall-clock time.
+// Instead, I decided to refactor the previous loop into a set of events
 void TcpFlowSendApplication::SendData(void) {
-    NS_LOG_FUNCTION(this);
+	NS_LOG_FUNCTION(this);
+	uint64_t packetsPerInterval = m_maxBytes/1500 + 1;
+    Ptr<ExponentialRandomVariable> m_interarrival = CreateObject<ExponentialRandomVariable> ();
+		m_interarrival->SetAttribute ("Mean", DoubleValue (1/packetsPerInterval));
+		m_interarrival->SetAttribute ("Bound", DoubleValue (1));
+
+	// if (m_maxBytes == 0 || m_totBytes < m_maxBytes) {
+	//	uint64_t toSend = m_sendSize;
+	//	if m_maxBytes > 0 {
+	//		toSend= std::min(toSend, m_maxBytes - m_totBytes);
+	//	}
+	//	generate send time
+	//	schedule the send event
+	// }
     while (m_maxBytes == 0 || m_totBytes < m_maxBytes) { // Time to send more
 
         // uint64_t to allow the comparison later.
@@ -208,41 +240,28 @@ void TcpFlowSendApplication::SendData(void) {
         // m_sendSize is uint32_t.
         uint64_t toSend = m_sendSize;
         // Make sure we don't send too many
-	//
-	// In order to send packets as a Poisson, we need to create an exponential random variable, bound it to the amount of remaining time in the horizon
-	// and run it from there 
-	// Or there can be a computation where the packet is pre-split into MTU-sized chunks and a remainder, and each of those are scheduled along the time horizon to be sent
-	//
-	// m_maxBytes % MTU == 0, then no extra packet
-	// otherwise, integer division determines number of full-size packets
-	//
-	// then, based on GSL incoming traffic rate, we can convert that to MTU-packets per second, and then use that as an average rate
-	// Then we iteratively generate an exponential random variable distribution, based on the amount of time left after the last scheduling
-	// bound in exp_x(lambda, bound) = realization of exp_{x-1}(lambda, bound)
-	// then the packet is scheduled for the realization of exp_x + the realization of exp_{x-1}
+	
         if (m_maxBytes > 0) {
             toSend = std::min(toSend, m_maxBytes - m_totBytes);
         }
+	Time sendTime = NanoSeconds(uint64_t(1000000000*m_interarrival->GetValue()));
+        NS_LOG_LOGIC("sending packet at " << sendTime);
+        Ptr<Packet> packet = Create<Packet>(toSend);
 
-        NS_LOG_LOGIC("sending packet at " << Simulator::Now());
-        Ptr <Packet> packet = Create<Packet>(toSend);
-        int actual = m_socket->Send(packet);
-        if (actual > 0) {
-            m_totBytes += actual;
-            m_txTrace(packet);
-        }
+	Callback<void, Ptr<Packet>, uint64_t> sendCallback = MakeCallback(&TcpFlowSendApplication::SendWrapper, this);
+	sendCallback(packet, toSend);
         // We exit this loop when actual < toSend as the send side
         // buffer is full. The "DataSent" callback will pop when
         // some buffer space has freed up.
-        if ((unsigned) actual != toSend) {
+        if (m_dropLoop) {
             break;
         }
     }
     // Check if time to close (all sent)
-    if (m_totBytes == m_maxBytes && m_connected) {
-        m_socket->Close(); // Close will only happen after send buffer is finished
-        m_connected = false;
-    }
+    //if (m_totBytes == m_maxBytes && m_connected) {
+    //    m_socket->Close(); // Close will only happen after send buffer is finished
+    //    m_connected = false;
+    //}
 }
 
 void TcpFlowSendApplication::ConnectionSucceeded(Ptr <Socket> socket) {
