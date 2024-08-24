@@ -87,7 +87,7 @@ private:
   std::string m_baseLogsDir;               //!< Where the logs will be written to:
                                            //!<   logs_dir/tcp_flow_[id]_{progress, cwnd, rtt}.csv
   TracedCallback<Ptr<const Packet> > m_txTrace;
-
+  Ptr<ExponentialRandomVariable> m_interarrival; // the random variable that defines exponential interarrival times
 private:
   void ConnectionSucceeded (Ptr<Socket> socket);
   void ConnectionFailed (Ptr<Socket> socket);

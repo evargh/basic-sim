@@ -128,9 +128,16 @@ TcpFlowSendApplication::DoDispose(void) {
 }
 
 void TcpFlowSendApplication::StartApplication(void) { // Called at time specified by Start
-    NS_LOG_FUNCTION(this);
-	m_dropLoop = false;
+		NS_LOG_FUNCTION(this);
+		m_dropLoop = false;
     // Create the socket if not already
+		if(m_maxBytes == 0) {
+			NS_FATAL_ERROR("MaxBytes not set yet");
+		}
+		uint64_t packetsPerInterval = m_maxBytes/1500 + 1;
+    		m_interarrival = CreateObject<ExponentialRandomVariable> ();
+		m_interarrival->SetAttribute ("Mean", DoubleValue (1000000000/packetsPerInterval));
+		m_interarrival->SetAttribute ("Bound", DoubleValue (1000000000));
     if (!m_socket) {
         m_socket = Socket::CreateSocket(GetNode(), m_tid);
 
@@ -202,66 +209,37 @@ void TcpFlowSendApplication::StopApplication(void) { // Called at time specified
     }
 }
 
-// EVAN: Since Socket::Send is virtual, we need a wrapper
+// EVAN: Since Socket::Send is virtual, we need a wrapper for the callback
 void TcpFlowSendApplication::SendWrapper(Ptr<Packet> p, uint64_t toSend) {
 	int actual = m_socket->Send(p);
 	if (actual > 0) {
 		m_totBytes += actual;
 		m_txTrace(p);
 	}
-	// here, set a boolean flag to signal that the loop should be broken
-        if ((unsigned) actual != toSend) {
-        	m_dropLoop = true;    
+	// if everything is ok, send the next packet
+        if ((unsigned) actual == toSend) {
+        	NS_LOG_DEBUG("next function called");
+		SendData();    
         }
-	// then this directly calls SendData
 }
 
 // with a mutex, I would need to delay for both a certain amount of simulated time as well as wall-clock time.
 // Instead, I decided to refactor the previous loop into a set of events
 void TcpFlowSendApplication::SendData(void) {
 	NS_LOG_FUNCTION(this);
-	uint64_t packetsPerInterval = m_maxBytes/1500 + 1;
-    Ptr<ExponentialRandomVariable> m_interarrival = CreateObject<ExponentialRandomVariable> ();
-		m_interarrival->SetAttribute ("Mean", DoubleValue (1/packetsPerInterval));
-		m_interarrival->SetAttribute ("Bound", DoubleValue (1));
 
-	// if (m_maxBytes == 0 || m_totBytes < m_maxBytes) {
-	//	uint64_t toSend = m_sendSize;
-	//	if m_maxBytes > 0 {
-	//		toSend= std::min(toSend, m_maxBytes - m_totBytes);
-	//	}
-	//	generate send time
-	//	schedule the send event
-	// }
-    while (m_maxBytes == 0 || m_totBytes < m_maxBytes) { // Time to send more
+	if (m_maxBytes == 0 || m_totBytes < m_maxBytes) {
+		uint64_t toSend = m_sendSize;
+		if (m_maxBytes > 0) {
+			toSend= std::min(toSend, m_maxBytes - m_totBytes);
+		}
+		Time sendTime = NanoSeconds(uint64_t(m_interarrival->GetValue()));
+		NS_LOG_DEBUG("sending packet at " << sendTime.GetNanoSeconds());
+		Ptr<Packet> packet = Create<Packet>(toSend);
+		//Callback<void, Ptr<Packet>, uint64_t> sendCallback = MakeCallback(&TcpFlowSendApplication::SendWrapper, this);
+		Simulator::Schedule(sendTime, &TcpFlowSendApplication::SendWrapper, this, packet, toSend);
+	 }	
 
-        // uint64_t to allow the comparison later.
-        // the result is in a uint32_t range anyway, because
-        // m_sendSize is uint32_t.
-        uint64_t toSend = m_sendSize;
-        // Make sure we don't send too many
-	
-        if (m_maxBytes > 0) {
-            toSend = std::min(toSend, m_maxBytes - m_totBytes);
-        }
-	Time sendTime = NanoSeconds(uint64_t(1000000000*m_interarrival->GetValue()));
-        NS_LOG_LOGIC("sending packet at " << sendTime);
-        Ptr<Packet> packet = Create<Packet>(toSend);
-
-	Callback<void, Ptr<Packet>, uint64_t> sendCallback = MakeCallback(&TcpFlowSendApplication::SendWrapper, this);
-	sendCallback(packet, toSend);
-        // We exit this loop when actual < toSend as the send side
-        // buffer is full. The "DataSent" callback will pop when
-        // some buffer space has freed up.
-        if (m_dropLoop) {
-            break;
-        }
-    }
-    // Check if time to close (all sent)
-    //if (m_totBytes == m_maxBytes && m_connected) {
-    //    m_socket->Close(); // Close will only happen after send buffer is finished
-    //    m_connected = false;
-    //}
 }
 
 void TcpFlowSendApplication::ConnectionSucceeded(Ptr <Socket> socket) {
